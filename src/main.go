@@ -8,15 +8,15 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"time"
-	"regexp"
 	"os/exec"
+	"regexp"
+	"time"
 
+	"github.com/procyon-projects/chrono"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/calendar/v3"
 	"google.golang.org/api/option"
-	"github.com/procyon-projects/chrono"
 )
 
 // Retrieve a token, saves the token, then returns the generated client.
@@ -37,7 +37,7 @@ func getClient(config *oauth2.Config) *http.Client {
 func getTokenFromWeb(config *oauth2.Config) *oauth2.Token {
 	authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
 	fmt.Printf("Go to the following link in your browser then type the "+
-	"authorization code: \n%v\n", authURL)
+		"authorization code: \n%v\n", authURL)
 
 	var authCode string
 	if _, err := fmt.Scan(&authCode); err != nil {
@@ -92,7 +92,26 @@ func scheduleZoom(when time.Time, link string) {
 	}
 }
 
-func grabZoomLink(text string) string {
+func grabZoomLink(item *calendar.Event) string {
+	link := ""
+	if item.ConferenceData != nil {
+		for _, entry := range item.ConferenceData.EntryPoints {
+			link = parseLink(entry.Uri)
+			if link != "" {
+				return link
+			}
+		}
+	}
+
+	link = parseLink(item.Description)
+	if link != "" {
+		return link
+	}
+
+	return parseLink(item.Location)
+}
+
+func parseLink(text string) string {
 	re := regexp.MustCompile(`(https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}zoom.us\b[-a-zA-Z0-9()@:%_\+.~#?&\/\/=]*)`)
 	return string(re.Find([]byte(text)))
 }
@@ -147,11 +166,7 @@ func main() {
 				continue
 			}
 
-			link := grabZoomLink(item.Description)
-			if link == "" {
-				link = grabZoomLink(item.Location)
-			}
-
+			link := grabZoomLink(item)
 			if link != "" {
 				scheduleZoom(when, link)
 			}
@@ -160,4 +175,3 @@ func main() {
 		<-time.After(8 * time.Hour)
 	}
 }
-
