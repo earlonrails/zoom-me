@@ -17,13 +17,51 @@ import (
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/calendar/v3"
 	"google.golang.org/api/option"
+	"google.golang.org/api/plus/v1"
 )
 
+type UserInfo struct {
+	Sub           string `json:"sub"`
+	Name          string `json:"name"`
+	GivenName     string `json:"given_name"`
+	FamilyName    string `json:"family_name"`
+	Profile       string `json:"profile"`
+	Picture       string `json:"picture"`
+	Email         string `json:"email"`
+	EmailVerified bool   `json:"email_verified"`
+	Gender        string `json:"gender"`
+}
+
+func getUserinfo(client *http.Client) (*UserInfo, error) {
+	resp, err := client.Get("https://www.googleapis.com/oauth2/v3/userinfo")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var result UserInfo
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // Retrieve a token, saves the token, then returns the generated client.
-func getClient(config *oauth2.Config) *http.Client {
-	// The file token.json stores the user's access and refresh tokens, and is
-	// created automatically when the authorization flow completes for the first
-	// time.
+func getClient() *http.Client {
+	b, err := ioutil.ReadFile("credentials.json")
+	if err != nil {
+		log.Fatalf("Unable to read client secret file: %v", err)
+	}
+
+	// If modifying these scopes, delete your previously saved token.json.
+	config, err := google.ConfigFromJSON(b, plus.UserinfoEmailScope, calendar.CalendarReadonlyScope)
+	if err != nil {
+		log.Fatalf("Unable to parse client secret file to config: %v", err)
+	}
+
 	tokFile := "token.json"
 	tok, err := tokenFromFile(tokFile)
 	if err != nil {
@@ -116,41 +154,53 @@ func parseLink(text string) string {
 	return string(re.Find([]byte(text)))
 }
 
-func getEvents() (*calendar.Events, error) {
-	ctx := context.Background()
-	b, err := ioutil.ReadFile("credentials.json")
-	if err != nil {
-		log.Fatalf("Unable to read client secret file: %v", err)
-	}
-
-	// If modifying these scopes, delete your previously saved token.json.
-	config, err := google.ConfigFromJSON(b, calendar.CalendarReadonlyScope)
-	if err != nil {
-		log.Fatalf("Unable to parse client secret file to config: %v", err)
-	}
-	client := getClient(config)
-
+func getEvents(ctx context.Context, client *http.Client, userinfo *UserInfo) ([]*calendar.Event, error) {
 	srv, err := calendar.NewService(ctx, option.WithHTTPClient(client))
 	if err != nil {
 		log.Fatalf("Unable to retrieve Calendar client: %v", err)
 	}
 
 	t := time.Now().Format(time.RFC3339)
-	return srv.Events.List("primary").ShowDeleted(false).
+	// attendees.email == userinfo.Email && attendees.responseStatus == "accepted"
+	all_events, err := srv.Events.List("primary").ShowDeleted(false).
 		SingleEvents(true).TimeMin(t).MaxResults(10).OrderBy("startTime").Do()
+
+	if err != nil {
+		return nil, err
+	}
+	your_events := []*calendar.Event{}
+	event_items := all_events.Items
+
+	for i := 0; i < len(event_items); i++ {
+		event := event_items[i]
+		for j := range event.Attendees {
+			attendee := event.Attendees[j]
+			if attendee.Email == userinfo.Email && attendee.ResponseStatus == "accepted" {
+				your_events = append(your_events, event)
+			}
+		}
+	}
+
+	return your_events, nil
 }
 
-func main() {
-	events, err := getEvents()
+func runInLoop() {
+	ctx := context.Background()
+	client := getClient()
+	userinfo, err := getUserinfo(client)
+	if err != nil {
+		log.Fatalf("Unable to get user's info: %v", err)
+	}
+	events, err := getEvents(ctx, client, userinfo)
 	if err != nil {
 		log.Fatalf("Unable to retrieve next ten of the user's events: %v", err)
 	}
 
 	fmt.Println("Upcoming events:")
-	if len(events.Items) == 0 {
+	if len(events) == 0 {
 		fmt.Println("No upcoming events found.")
 	} else {
-		for _, item := range events.Items {
+		for _, item := range events {
 			date := item.Start.DateTime
 			if date == "" {
 				date = item.Start.Date
@@ -171,7 +221,11 @@ func main() {
 				scheduleZoom(when, link)
 			}
 		}
-
-		<-time.After(8 * time.Hour)
 	}
+	<-time.After(8 * time.Hour)
+	runInLoop()
+}
+
+func main() {
+	runInLoop()
 }
