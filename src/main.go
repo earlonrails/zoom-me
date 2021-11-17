@@ -112,9 +112,9 @@ func saveToken(path string, token *oauth2.Token) {
 	json.NewEncoder(f).Encode(token)
 }
 
-func scheduleZoom(when time.Time, link string) {
+func scheduleZoom(when time.Time, link string) chrono.ScheduledTask {
 	taskScheduler := chrono.NewDefaultTaskScheduler()
-	_, err := taskScheduler.Schedule(func(ctx context.Context) {
+	task, err := taskScheduler.Schedule(func(ctx context.Context) {
 		cmd := exec.Command("open", "-a", "Google Chrome", link)
 		log.Printf("Opening Chrome with link: %v", link)
 		err := cmd.Run()
@@ -128,6 +128,8 @@ func scheduleZoom(when time.Time, link string) {
 	} else {
 		log.Printf("Link: %v will open at: %v", link, when)
 	}
+
+	return task
 }
 
 func grabZoomLink(item *calendar.Event) string {
@@ -185,6 +187,7 @@ func getEvents(ctx context.Context, client *http.Client, userinfo *UserInfo) ([]
 }
 
 func runInLoop() {
+	var tasks []chrono.ScheduledTask
 	ctx := context.Background()
 	client := getClient()
 	userinfo, err := getUserinfo(client)
@@ -218,11 +221,15 @@ func runInLoop() {
 
 			link := grabZoomLink(item)
 			if link != "" {
-				scheduleZoom(when, link)
+				task := scheduleZoom(when, link)
+				tasks = append(tasks, task)
 			}
 		}
 	}
 	<-time.After(8 * time.Hour)
+	for _, task := range tasks {
+		task.Cancel()
+	}
 	runInLoop()
 }
 
