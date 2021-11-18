@@ -250,6 +250,7 @@ func runInLoop() {
 	for _, task := range tasks {
 		task.Cancel()
 	}
+	tasks = nil
 	runInLoop()
 }
 
