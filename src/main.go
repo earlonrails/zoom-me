@@ -32,6 +32,11 @@ type UserInfo struct {
 	Gender        string `json:"gender"`
 }
 
+type ErrorDetails struct {
+	Error            string `json:"error"`
+	ErrorDescription string `json:"error_description"`
+}
+
 func getUserinfo(client *http.Client) (*UserInfo, error) {
 	resp, err := client.Get("https://www.googleapis.com/oauth2/v3/userinfo")
 	if err != nil {
@@ -64,11 +69,21 @@ func getClient() *http.Client {
 
 	tokFile := "token.json"
 	tok, err := tokenFromFile(tokFile)
+	if isExpired(tok) {
+		tok, err = config.TokenSource(context.TODO(), tok).Token()
+	}
 	if err != nil {
 		tok = getTokenFromWeb(config)
 		saveToken(tokFile, tok)
 	}
 	return config.Client(context.Background(), tok)
+}
+
+func isExpired(token *oauth2.Token) bool {
+	if token.Expiry.Before(time.Now()) {
+		return true
+	}
+	return false
 }
 
 // Request a token from the web, then returns the retrieved token.
@@ -193,6 +208,11 @@ func runInLoop() {
 	userinfo, err := getUserinfo(client)
 	if err != nil {
 		log.Fatalf("Unable to get user's info: %v", err)
+		// refresh token here
+		// Response: {
+		// 	"error": "invalid_grant",
+		// 	"error_description": "Token has been expired or revoked."
+		// }
 	}
 	events, err := getEvents(ctx, client, userinfo)
 	if err != nil {
